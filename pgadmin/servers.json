@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Profit Life Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "backtest",
+      "Username": "backtest",
+      "SSLMode": "prefer"
+    }
+  }
+}
