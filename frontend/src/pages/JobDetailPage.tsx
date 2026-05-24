@@ -207,7 +207,7 @@ export default function JobDetailPage() {
             {job.errorMessage ?? "Unknown error"}
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <button
             type="button"
             onClick={() => navigate("/dashboard/jobs")}
@@ -257,7 +257,7 @@ export default function JobDetailPage() {
         >
           ← Back to jobs
         </button>
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-words">
           {job.strategyName ?? "Backtest result"}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
@@ -411,7 +411,7 @@ export default function JobDetailPage() {
             <dd className="text-sm text-gray-900 mt-1">{job.rr ?? "—"}</dd>
           </div>
         </dl>
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <button
             type="button"
             onClick={() => navigate("/dashboard/jobs")}

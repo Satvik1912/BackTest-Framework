@@ -102,9 +102,9 @@ export default function JobsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Backtest Jobs</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Backtest Jobs</h1>
           <p className="text-sm text-gray-500 mt-1">{jobs.length} total</p>
         </div>
         <Link
@@ -121,8 +121,8 @@ export default function JobsPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+        <table className="w-full text-sm min-w-[720px]">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               <th className="px-4 py-3">Strategy</th>

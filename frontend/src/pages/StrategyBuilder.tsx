@@ -258,7 +258,7 @@ export default function StrategyBuilder() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
-      <aside className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-4 max-h-[calc(100vh-7rem)] overflow-y-auto shadow-sm">
+      <aside className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-4 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-gray-900">Indicator Library</h2>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">

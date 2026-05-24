@@ -26,22 +26,22 @@ export default function Navbar() {
 
   return (
     <nav className="bg-white border-b border-gray-200">
-      <div className="max-w-7xl mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
+      <div className="max-w-7xl mx-auto px-3 sm:px-4">
+        <div className="flex items-center justify-between h-16 gap-2">
 
-          <div className="flex items-center gap-8">
-            <Link to="/dashboard" className="flex items-center gap-2">
+          <div className="flex items-center gap-3 sm:gap-8 min-w-0">
+            <Link to="/dashboard" className="flex items-center gap-2 shrink-0">
               <img
                 src="/profit-life.png"
                 alt="Profit Life"
-                className="h-9 w-9 object-contain"
+                className="h-8 w-8 sm:h-9 sm:w-9 object-contain"
               />
-              <span className="text-xl font-bold bg-gradient-to-r from-amber-600 to-amber-500 bg-clip-text text-transparent">
+              <span className="hidden sm:inline text-xl font-bold bg-gradient-to-r from-amber-600 to-amber-500 bg-clip-text text-transparent">
                 Profit Life
               </span>
             </Link>
 
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 sm:gap-6 min-w-0">
               <Link
                 to="/dashboard/strategies"
                 className={`text-sm font-medium pb-1 transition-colors ${isActive("/dashboard/strategies")}`}>
@@ -55,8 +55,8 @@ export default function Navbar() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+            <span className="hidden md:inline text-sm text-gray-500 truncate max-w-[180px]">
               {user?.email}
             </span>
             <button

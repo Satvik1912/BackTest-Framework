@@ -76,7 +76,7 @@ export default function AdminUsersPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Users</h1>
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Users</h1>
         <p className="text-gray-600 text-sm">
           Approve sign-ups, inspect each user's strategies, or remove an account.
         </p>
@@ -93,8 +93,8 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
           <thead className="bg-gray-50 text-left text-gray-600">
             <tr>
               <th className="py-3 px-4 font-medium">Email</th>
