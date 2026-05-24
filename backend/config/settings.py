@@ -36,11 +36,18 @@ def _build_db_url_from_spring_env() -> Optional[str]:
 
 def _load() -> Settings:
     defaults = Settings()
+    cors_env = os.getenv("CORS_ORIGINS")
+    cors_origins = (
+        [o.strip() for o in cors_env.split(",") if o.strip()]
+        if cors_env
+        else defaults.cors_origins
+    )
     return Settings(
         database_url=os.getenv("DATABASE_URL") or _build_db_url_from_spring_env() or defaults.database_url,
         jwt_secret=os.getenv("JWT_SECRET", defaults.jwt_secret),
         admin_key=os.getenv("ADMIN_KEY", defaults.admin_key),
         engine_max_workers=int(os.getenv("ENGINE_MAX_WORKERS", str(defaults.engine_max_workers))),
+        cors_origins=cors_origins,
     )
 
 

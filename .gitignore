@@ -11,6 +11,8 @@ Thumbs.db
 *.log
 logs/
 
-# Env
+# Env — never commit real secrets; example files (.env.example, .env.*.example) are allowed
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
