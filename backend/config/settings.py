@@ -2,6 +2,7 @@ import os
 import re
 from typing import Optional
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,11 +15,16 @@ class Settings(BaseSettings):
     refresh_token_days: int = 30
     admin_key: str = "392172"
     engine_max_workers: int = 2
-    cors_origins: list[str] = [
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:5174",
-    ]
+    # str (not list) so pydantic-settings reads the env var verbatim instead of
+    # JSON-decoding it. Comma-separated origins; split via cors_origins property.
+    cors_origins_raw: str = Field(
+        default="http://localhost:3000,http://localhost:5173,http://localhost:5174",
+        alias="CORS_ORIGINS",
+    )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins_raw.split(",") if o.strip()]
 
 
 def _build_db_url_from_spring_env() -> Optional[str]:
@@ -36,18 +42,12 @@ def _build_db_url_from_spring_env() -> Optional[str]:
 
 def _load() -> Settings:
     defaults = Settings()
-    cors_env = os.getenv("CORS_ORIGINS")
-    cors_origins = (
-        [o.strip() for o in cors_env.split(",") if o.strip()]
-        if cors_env
-        else defaults.cors_origins
-    )
     return Settings(
         database_url=os.getenv("DATABASE_URL") or _build_db_url_from_spring_env() or defaults.database_url,
         jwt_secret=os.getenv("JWT_SECRET", defaults.jwt_secret),
         admin_key=os.getenv("ADMIN_KEY", defaults.admin_key),
         engine_max_workers=int(os.getenv("ENGINE_MAX_WORKERS", str(defaults.engine_max_workers))),
-        cors_origins=cors_origins,
+        CORS_ORIGINS=defaults.cors_origins_raw,
     )
 
 
