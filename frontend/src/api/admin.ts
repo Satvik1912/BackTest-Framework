@@ -42,16 +42,19 @@ function parseIfString<T>(value: unknown): T {
   return value as T
 }
 
+function normalizeResult(raw: JobResult): JobResult {
+  return {
+    ...raw,
+    equityCurve: parseIfString<EquityPoint[]>(raw.equityCurve),
+    trades: parseIfString<TradeRecord[]>(raw.trades)
+  }
+}
+
 function normalize(job: BacktestJob): BacktestJob {
-  if (!job.result) return job
-  const raw = job.result as JobResult
   return {
     ...job,
-    result: {
-      ...raw,
-      equityCurve: parseIfString<EquityPoint[]>(raw.equityCurve),
-      trades: parseIfString<TradeRecord[]>(raw.trades)
-    }
+    result: job.result ? normalizeResult(job.result) : job.result,
+    results: job.results ? job.results.map(normalizeResult) : job.results
   }
 }
 

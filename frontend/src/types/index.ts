@@ -36,6 +36,12 @@ export interface IndicatorParam {
   min?: number
   max?: number
   enumValues?: string[]
+  help?: string
+}
+
+export interface ThresholdSuggestion {
+  label: string
+  value: number
 }
 
 export interface IndicatorMetadata {
@@ -45,6 +51,13 @@ export interface IndicatorMetadata {
   category: "TREND" | "MOMENTUM" | "VOLATILITY" | "PATTERN" | "VOLUME"
   executionSide: "JAVA" | "PYTHON"
   params: IndicatorParam[]
+  usesThreshold: boolean
+  thresholdLabel: string
+  thresholdHelp: string
+  thresholdMin?: number | null
+  thresholdMax?: number | null
+  defaultThreshold: number
+  thresholdSuggestions: ThresholdSuggestion[]
 }
 
 export interface IndicatorCondition {
@@ -64,6 +77,7 @@ export type Direction = "LONG" | "SHORT"
 export interface StrategyDefinition {
   name: string
   ticker: string
+  tickers: string[]
   interval: string
   period: string
   rr: number
@@ -88,6 +102,7 @@ export interface Strategy {
   id: string
   name: string
   ticker: string
+  tickers?: string[]
   interval: string
   period: string
   rr: number
@@ -129,6 +144,7 @@ export interface EquityPoint {
 }
 
 export interface JobResult {
+  symbol?: string
   totalTrades: number
   wins: number
   losses: number
@@ -140,6 +156,27 @@ export interface JobResult {
   trades: TradeRecord[]
 }
 
+// The full strategy definition echoed back on a job, so the results page (and
+// admins) can see exactly what strategy was applied.
+export interface StrategyDefinitionView {
+  direction?: Direction
+  conditionLogic?: "AND" | "OR"
+  slType?: string
+  slLookback?: number
+  atrMultiple?: number
+  slPct?: number
+  chandelierMultiple?: number
+  chandelierPeriod?: number
+  targetType?: string
+  targetPct?: number
+  targetAtrMultiple?: number
+  targetSwingLookback?: number
+  maxBarsInTrade?: number
+  rr?: number
+  entryConditions?: IndicatorCondition[]
+  [key: string]: unknown
+}
+
 export interface BacktestJob {
   jobId: string
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED"
@@ -148,10 +185,13 @@ export interface BacktestJob {
   completedAt?: string
   errorMessage?: string
   result?: JobResult
+  results?: JobResult[]
   strategyId?: string
   strategyName?: string
   ticker?: string
+  tickers?: string[]
   interval?: string
   period?: string
   rr?: number
+  definition?: StrategyDefinitionView
 }

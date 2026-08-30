@@ -59,10 +59,12 @@ def _require_active(db: Session, sid: UUID, user_id: UUID) -> Strategy:
 
 def _to_response(s: Strategy) -> StrategyResponseDTO:
     d = s.definition or {}
+    tickers = d.get("tickers") or ([d.get("ticker")] if d.get("ticker") else [])
     return StrategyResponseDTO(
         id=s.id,
         name=s.name,
         ticker=d.get("ticker", ""),
+        tickers=tickers,
         interval=d.get("interval", ""),
         period=d.get("period", ""),
         rr=float(d.get("rr", 0)),

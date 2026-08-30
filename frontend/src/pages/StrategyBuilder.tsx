@@ -13,6 +13,7 @@ import {
   Strategy,
   StrategyDefinition
 } from "../types"
+import { operatorLabel } from "../lib/format"
 
 type SlType = "SWING_LOW" | "ATR_MULTIPLE" | "FIXED_PCT" | "CHANDELIER_EXIT"
 type TargetType = "R_MULTIPLE" | "FIXED_PCT" | "ATR_MULTIPLE" | "PRIOR_SWING_HIGH"
@@ -21,6 +22,7 @@ type Logic = "AND" | "OR"
 const CATEGORIES = ["TREND", "MOMENTUM", "VOLATILITY", "PATTERN", "VOLUME"] as const
 const INTERVALS = ["1m", "5m", "15m", "1h", "1d"]
 const PERIODS = ["7d", "30d", "60d", "6mo", "1y"]
+const MAX_TICKERS = 5
 
 const PATTERN_OPERATORS = ["EQUALS"]
 const STANDARD_OPERATORS = ["CROSSES_ABOVE", "CROSSES_BELOW", "OVER", "UNDER"]
@@ -63,7 +65,8 @@ export default function StrategyBuilder() {
   const [logic, setLogic] = useState<Logic>("AND")
 
   const [name, setName] = useState("")
-  const [ticker, setTicker] = useState("")
+  const [tickers, setTickers] = useState<string[]>([])
+  const [tickerInput, setTickerInput] = useState("")
   const [interval, setIntervalValue] = useState("5m")
   const [period, setPeriod] = useState("60d")
   const [rr, setRr] = useState(2.0)
@@ -95,7 +98,13 @@ export default function StrategyBuilder() {
   useEffect(() => {
     if (!editingStrategy) return
     setName(editingStrategy.name)
-    setTicker(editingStrategy.ticker)
+    setTickers(
+      editingStrategy.tickers && editingStrategy.tickers.length > 0
+        ? editingStrategy.tickers
+        : editingStrategy.ticker
+          ? [editingStrategy.ticker]
+          : []
+    )
     setIntervalValue(editingStrategy.interval)
     setPeriod(editingStrategy.period)
     setRr(editingStrategy.rr)
@@ -132,11 +141,29 @@ export default function StrategyBuilder() {
     return g
   }, [indicators])
 
+  const addTicker = () => {
+    const sym = tickerInput.trim().toUpperCase()
+    if (!sym) return
+    if (tickers.includes(sym)) { setTickerInput(""); return }
+    if (tickers.length >= MAX_TICKERS) {
+      setError(`You can analyze at most ${MAX_TICKERS} stocks at once`)
+      return
+    }
+    setError("")
+    setTickers([...tickers, sym])
+    setTickerInput("")
+  }
+
+  const removeTicker = (sym: string) => setTickers(tickers.filter((t) => t !== sym))
+
   const addCondition = (ind: IndicatorMetadata) => {
     const params: Record<string, number | string> = {}
     ind.params.forEach((p) => { params[p.key] = p.defaultValue })
+    // Sensible starting operator + threshold so the first strategy is runnable:
+    // patterns just need to appear; threshold indicators start at their natural
+    // level (e.g. RSI 30); signal-based indicators ignore the threshold.
     const operator = ind.category === "PATTERN" ? "EQUALS" : "CROSSES_ABOVE"
-    const threshold = ind.category === "PATTERN" ? 1 : 0
+    const threshold = ind.category === "PATTERN" ? 1 : ind.usesThreshold ? ind.defaultThreshold : 0
     setConditions([...conditions, { indicatorKey: ind.key, params, operator, threshold }])
   }
 
@@ -157,16 +184,29 @@ export default function StrategyBuilder() {
   const buildDefinition = (): StrategyDefinition | null => {
     setError("")
     setSuccess("")
+    // Fold any half-typed symbol still in the input box into the list.
+    const pending = tickerInput.trim().toUpperCase()
+    const effectiveTickers =
+      pending && !tickers.includes(pending) && tickers.length < MAX_TICKERS
+        ? [...tickers, pending]
+        : tickers
     if (!name.trim()) { setError("Strategy name is required"); return null }
-    if (!ticker.trim()) { setError("Ticker is required"); return null }
+    if (effectiveTickers.length === 0) { setError("Add at least one stock (ticker)"); return null }
+    if (effectiveTickers.length > MAX_TICKERS) {
+      setError(`You can analyze at most ${MAX_TICKERS} stocks at once`)
+      return null
+    }
     if (conditions.length === 0) {
       setError("Add at least one entry condition")
       return null
     }
+    setTickers(effectiveTickers)
+    setTickerInput("")
     const maxBars = typeof maxBarsInTrade === "number" && maxBarsInTrade > 0 ? maxBarsInTrade : undefined
     return {
       name: name.trim(),
-      ticker: ticker.trim(),
+      ticker: effectiveTickers[0],
+      tickers: effectiveTickers,
       interval,
       period,
       rr,
@@ -341,6 +381,8 @@ export default function StrategyBuilder() {
             }
             const operators = ind.category === "PATTERN" ? PATTERN_OPERATORS : STANDARD_OPERATORS
             const isPattern = ind.category === "PATTERN"
+            const showThreshold = !isPattern && ind.usesThreshold
+            const signalBased = !isPattern && !ind.usesThreshold
             const meta = CATEGORY_META[ind.category] ?? CATEGORY_META.TREND
             return (
               <div key={idx} className="group relative bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-slate-300 hover:shadow-md transition-all">
@@ -365,25 +407,35 @@ export default function StrategyBuilder() {
                       ✕
                     </button>
                   </div>
+                  {ind.description && (
+                    <p className="text-xs text-slate-500 mb-3 leading-snug">{ind.description}</p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1">Operator</label>
+                      <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1">Condition</label>
                       <select
                         value={cond.operator}
                         onChange={(e) => updateCondition(idx, { operator: e.target.value })}
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm text-gray-900 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition"
                       >
                         {operators.map((op) => (
-                          <option key={op} value={op}>{op}</option>
+                          <option key={op} value={op}>{operatorLabel(op)}</option>
                         ))}
                       </select>
                     </div>
-                    {!isPattern && (
+                    {showThreshold && (
                       <div>
-                        <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1">Threshold</label>
+                        <label
+                          className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1"
+                          title={ind.thresholdHelp}
+                        >
+                          {ind.thresholdLabel}
+                        </label>
                         <input
                           type="number"
                           value={cond.threshold}
+                          min={ind.thresholdMin ?? undefined}
+                          max={ind.thresholdMax ?? undefined}
                           onChange={(e) => updateCondition(idx, { threshold: parseFloat(e.target.value) || 0 })}
                           className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition"
                         />
@@ -391,7 +443,12 @@ export default function StrategyBuilder() {
                     )}
                     {ind.params.map((p) => (
                       <div key={p.key}>
-                        <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1">{p.label}</label>
+                        <label
+                          className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1"
+                          title={p.help}
+                        >
+                          {p.label}
+                        </label>
                         <input
                           type="number"
                           value={cond.params[p.key] ?? ""}
@@ -408,6 +465,40 @@ export default function StrategyBuilder() {
                       </div>
                     ))}
                   </div>
+
+                  {showThreshold && (ind.thresholdHelp || ind.thresholdSuggestions.length > 0) && (
+                    <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
+                      {ind.thresholdHelp && (
+                        <p className="text-[11px] text-slate-500 leading-snug">{ind.thresholdHelp}</p>
+                      )}
+                      {ind.thresholdSuggestions.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mr-0.5">
+                            Try:
+                          </span>
+                          {ind.thresholdSuggestions.map((s) => (
+                            <button
+                              type="button"
+                              key={s.label}
+                              onClick={() => updateCondition(idx, { threshold: s.value })}
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition ${
+                                cond.threshold === s.value
+                                  ? "bg-blue-600 text-white border-blue-600"
+                                  : "bg-white text-slate-600 border-slate-300 hover:border-blue-400 hover:text-blue-600"
+                              }`}
+                            >
+                              {s.label} · {s.value}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {signalBased && (
+                    <p className="mt-2 text-[11px] text-slate-400 leading-snug">
+                      Signal-based indicator — it fires on its own crossover, so there's no level to set.
+                    </p>
+                  )}
                 </div>
               </div>
             )
@@ -501,13 +592,56 @@ export default function StrategyBuilder() {
             </div>
 
             <div>
-              <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-1">Ticker</label>
-              <input
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value)}
-                className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm text-gray-900 font-mono focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition"
-                placeholder="e.g. TATASTEEL.NS"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+                  Stocks
+                </label>
+                <span className="text-[10px] text-slate-400">{tickers.length}/{MAX_TICKERS}</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={tickerInput}
+                  onChange={(e) => setTickerInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); addTicker() }
+                  }}
+                  disabled={tickers.length >= MAX_TICKERS}
+                  className="flex-1 min-w-0 px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm text-gray-900 font-mono focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition disabled:bg-slate-50"
+                  placeholder="e.g. TATASTEEL.NS"
+                />
+                <button
+                  type="button"
+                  onClick={addTicker}
+                  disabled={tickers.length >= MAX_TICKERS || !tickerInput.trim()}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  Add
+                </button>
+              </div>
+              {tickers.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {tickers.map((t) => (
+                    <span
+                      key={t}
+                      className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-mono"
+                    >
+                      {t}
+                      <button
+                        type="button"
+                        onClick={() => removeTicker(t)}
+                        className="h-4 w-4 inline-flex items-center justify-center rounded-full text-blue-400 hover:text-blue-700 hover:bg-blue-100"
+                        aria-label={`Remove ${t}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1.5 text-[11px] text-slate-400 leading-snug">
+                Add up to {MAX_TICKERS} NSE symbols (e.g. <span className="font-mono">INFY.NS</span>). Each is
+                backtested with the same strategy so you can compare.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-2">

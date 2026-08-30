@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from constants import MAX_TICKERS
 from dtos import SaveJobResultRequest
 from engine.backtest_engine import BacktestEngine
 from engine.data_provider import MarketDataProvider, YFinanceProvider
@@ -52,23 +53,62 @@ class JobExecutor:
                 return
 
             definition = strategy.definition or {}
-            ticker = definition.get("ticker", "")
+            symbols = self._resolve_symbols(definition)
             interval = definition.get("interval", "5m")
             period = definition.get("period", "60d")
             rr = float(definition.get("rr", 2.0))
+
+        if not symbols:
+            job_service_update_status_isolated(
+                self._session_factory, job_id, "FAILED", "No ticker configured"
+            )
+            return
 
         # Heavy I/O + CPU work runs outside the DB session so we don't hold a
         # connection while yfinance and pandas churn for seconds.
         job_service_update_status_isolated(self._session_factory, job_id, "RUNNING", None)
 
-        df = self._data_provider.fetch(ticker, period, interval)
+        # Signal/manage closures depend only on the definition, so build once
+        # and reuse across every symbol.
         signal = build_signal_func(definition)
         manage = build_manage_func(definition)
-        trades = BacktestEngine(data=df, rr=rr, signal_func=signal, manage_func=manage).run()
-        stats = compute_stats(trades, rr)
 
-        with self._session_factory() as db:
-            job_service.save_job_result(db, job_id, SaveJobResultRequest(**stats))
+        succeeded = 0
+        failures: list[str] = []
+        for symbol in symbols:
+            try:
+                df = self._data_provider.fetch(symbol, period, interval)
+                trades = BacktestEngine(data=df, rr=rr, signal_func=signal, manage_func=manage).run()
+                stats = compute_stats(trades, rr)
+                with self._session_factory() as db:
+                    job_service.save_symbol_result(
+                        db, job_id, symbol, SaveJobResultRequest(**stats)
+                    )
+                succeeded += 1
+            except Exception as exc:  # noqa: BLE001 — isolate one bad symbol
+                failures.append(f"{symbol}: {exc}")
+
+        # The job is DONE if at least one symbol produced a result; only a total
+        # wipeout is a FAILED job. Partial failures are surfaced via the message.
+        if succeeded == 0:
+            message = "; ".join(failures) or "No results produced"
+            job_service_update_status_isolated(self._session_factory, job_id, "FAILED", message)
+            return
+
+        message = f"Some symbols failed — {'; '.join(failures)}" if failures else None
+        job_service_update_status_isolated(self._session_factory, job_id, "DONE", message)
+
+    @staticmethod
+    def _resolve_symbols(definition: dict) -> list[str]:
+        raw = definition.get("tickers") or [definition.get("ticker", "")]
+        seen: set[str] = set()
+        out: list[str] = []
+        for t in raw:
+            sym = (t or "").strip().upper()
+            if sym and sym not in seen:
+                seen.add(sym)
+                out.append(sym)
+        return out[:MAX_TICKERS]
 
     def _mark_failed(self, job_id: UUID, message: str) -> None:
         try:

@@ -6,7 +6,7 @@ from dtos.auth_dto import (
     RefreshTokenRequest,
     RegisterRequest,
 )
-from dtos.indicator_dto import IndicatorMetadata, IndicatorParam
+from dtos.indicator_dto import IndicatorMetadata, IndicatorParam, ThresholdSuggestionDTO
 from dtos.job_dto import (
     JobResultDTO,
     JobStatusResponse,
@@ -29,6 +29,7 @@ __all__ = [
     "RegisterRequest",
     "IndicatorMetadata",
     "IndicatorParam",
+    "ThresholdSuggestionDTO",
     "JobResultDTO",
     "JobStatusResponse",
     "RunBacktestRequest",

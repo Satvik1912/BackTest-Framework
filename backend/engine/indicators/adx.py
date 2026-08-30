@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from engine.indicators.base import Indicator, IndicatorParamSpec
+from engine.indicators.base import Indicator, IndicatorParamSpec, ThresholdSuggestion
 from engine.operators import apply_operator
 
 
@@ -11,6 +11,22 @@ class AdxIndicator(Indicator):
     description = "Trend-strength oscillator (0-100); >25 typically signals a strong trend."
     category = "TREND"
     params = [IndicatorParamSpec("period", "Period", "INT", 14, min=2, max=200)]
+
+    uses_threshold = True
+    threshold_label = "ADX level"
+    threshold_help = (
+        "Measures trend STRENGTH only (not direction), 0–100. Above 25 = a "
+        "strong trend worth trading; below 20 = choppy/ranging. Pair it with a "
+        "direction indicator."
+    )
+    threshold_min = 0
+    threshold_max = 100
+    default_threshold = 25
+    threshold_suggestions = [
+        ThresholdSuggestion("Ranging", 20),
+        ThresholdSuggestion("Strong trend", 25),
+        ThresholdSuggestion("Very strong", 40),
+    ]
 
     def evaluate(self, i, df, params, operator, threshold):
         period = int(params.get("period", 14))

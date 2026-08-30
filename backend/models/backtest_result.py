@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -14,9 +14,12 @@ class BacktestResult(Base):
     __tablename__ = "backtest_results"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # No longer unique on job_id alone: a multi-stock job produces one result
+    # row per symbol. Uniqueness is now (job_id, symbol) — see migration 0002.
     job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("backtest_jobs.id"), unique=True
+        UUID(as_uuid=True), ForeignKey("backtest_jobs.id")
     )
+    symbol: Mapped[Optional[str]] = mapped_column(Text)
     total_trades: Mapped[Optional[int]] = mapped_column(Integer)
     wins: Mapped[Optional[int]] = mapped_column(Integer)
     losses: Mapped[Optional[int]] = mapped_column(Integer)

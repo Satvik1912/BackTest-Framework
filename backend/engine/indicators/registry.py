@@ -1,6 +1,6 @@
 """Runtime registry over Indicator subclasses."""
 from engine.indicators.base import Indicator
-from dtos import IndicatorMetadata, IndicatorParam
+from dtos import IndicatorMetadata, IndicatorParam, ThresholdSuggestionDTO
 
 
 def get(key: str) -> Indicator:
@@ -32,8 +32,19 @@ def metadata() -> list[IndicatorMetadata]:
                     min=p.min,
                     max=p.max,
                     enumValues=p.enumValues,
+                    help=p.help,
                 )
                 for p in cls.params
+            ],
+            usesThreshold=cls.uses_threshold,
+            thresholdLabel=cls.threshold_label,
+            thresholdHelp=cls.threshold_help,
+            thresholdMin=cls.threshold_min,
+            thresholdMax=cls.threshold_max,
+            defaultThreshold=cls.default_threshold,
+            thresholdSuggestions=[
+                ThresholdSuggestionDTO(label=s.label, value=s.value)
+                for s in cls.threshold_suggestions
             ],
         )
         for cls in Indicator._registry.values()

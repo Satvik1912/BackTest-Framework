@@ -68,15 +68,23 @@ def update_job_status(db: Session, job_id: UUID, status: str, error_message: Opt
     backtest_job_repository.save(db, job)
 
 
-def save_job_result(db: Session, job_id: UUID, req: SaveJobResultRequest) -> None:
+def save_symbol_result(db: Session, job_id: UUID, symbol: str, req: SaveJobResultRequest) -> None:
+    """Upsert the backtest result for one symbol of a job.
+
+    Does NOT change job status — a multi-stock job is only DONE once every
+    symbol has been processed (the executor sets the terminal status).
+    """
     job = backtest_job_repository.find_by_id(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    result = backtest_result_repository.find_by_job_id(db, job_id)
+    result = backtest_result_repository.find_by_job_and_symbol(db, job_id, symbol)
     if not result:
-        result = BacktestResult(job_id=job_id, created_at=datetime.now(tz=timezone.utc))
+        result = BacktestResult(
+            job_id=job_id, symbol=symbol, created_at=datetime.now(tz=timezone.utc)
+        )
 
+    result.symbol = symbol
     result.total_trades = req.totalTrades
     result.wins = req.wins
     result.losses = req.losses
@@ -87,10 +95,6 @@ def save_job_result(db: Session, job_id: UUID, req: SaveJobResultRequest) -> Non
     result.equity_curve = req.equityCurve
     result.trades = req.trades
     backtest_result_repository.save(db, result)
-
-    job.status = "DONE"
-    job.completed_at = datetime.now(tz=timezone.utc)
-    backtest_job_repository.save(db, job)
 
 
 def enqueue_for_strategy(db: Session, strategy: Strategy, owner_user_id: UUID) -> JobStatusResponse:
@@ -107,6 +111,7 @@ def enqueue_for_strategy(db: Session, strategy: Strategy, owner_user_id: UUID) -
 
 def _result_to_dto(r: BacktestResult) -> JobResultDTO:
     return JobResultDTO(
+        symbol=r.symbol,
         totalTrades=r.total_trades,
         wins=r.wins,
         losses=r.losses,
@@ -122,24 +127,27 @@ def _result_to_dto(r: BacktestResult) -> JobResultDTO:
 def _to_response(db: Session, job: BacktestJob) -> JobStatusResponse:
     strategy_name: Optional[str] = None
     ticker = interval = period = None
+    tickers: list[str] = []
     rr: Optional[float] = None
+    definition: Optional[dict] = None
 
     if job.strategy_id:
         s = strategy_repository.find_by_id(db, job.strategy_id)
         if s:
             strategy_name = s.name
             d = s.definition or {}
+            definition = d
             ticker = d.get("ticker")
+            tickers = d.get("tickers") or ([ticker] if ticker else [])
             interval = d.get("interval")
             period = d.get("period")
             rr_val = d.get("rr")
             rr = float(rr_val) if rr_val is not None else None
 
-    result_dto: Optional[JobResultDTO] = None
+    result_dtos: list[JobResultDTO] = []
     if job.status == "DONE":
-        result = backtest_result_repository.find_by_job_id(db, job.id)
-        if result:
-            result_dto = _result_to_dto(result)
+        rows = backtest_result_repository.find_all_by_job_id(db, job.id)
+        result_dtos = [_result_to_dto(r) for r in rows]
 
     return JobStatusResponse(
         jobId=job.id,
@@ -151,8 +159,11 @@ def _to_response(db: Session, job: BacktestJob) -> JobStatusResponse:
         strategyId=job.strategy_id,
         strategyName=strategy_name,
         ticker=ticker,
+        tickers=tickers,
         interval=interval,
         period=period,
         rr=rr,
-        result=result_dto,
+        result=result_dtos[0] if result_dtos else None,
+        results=result_dtos,
+        definition=definition,
     )

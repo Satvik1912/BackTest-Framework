@@ -7,6 +7,11 @@
 .DS_Store
 Thumbs.db
 
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Logs
 *.log
 logs/
