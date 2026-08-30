@@ -1,6 +1,6 @@
 import pandas as pd
 
-from engine.indicators.base import Indicator, IndicatorParamSpec
+from engine.indicators.base import Indicator, IndicatorParamSpec, ThresholdSuggestion
 from engine.operators import apply_operator
 
 
@@ -10,6 +10,21 @@ class CciIndicator(Indicator):
     description = "Measures deviation from average price; >100 strong up, <-100 strong down."
     category = "MOMENTUM"
     params = [IndicatorParamSpec("period", "Period", "INT", 20, min=2, max=200)]
+
+    uses_threshold = True
+    threshold_label = "CCI level"
+    threshold_help = (
+        "Usually swings within ±100. Above +100 = strong upside momentum, "
+        "below −100 = strong downside. Extremes (±200) mark stretched moves."
+    )
+    threshold_min = -300
+    threshold_max = 300
+    default_threshold = 100
+    threshold_suggestions = [
+        ThresholdSuggestion("Strong down", -100),
+        ThresholdSuggestion("Zero line", 0),
+        ThresholdSuggestion("Strong up", 100),
+    ]
 
     def evaluate(self, i, df, params, operator, threshold):
         period = int(params.get("period", 20))

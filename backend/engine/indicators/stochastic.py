@@ -1,6 +1,6 @@
 import pandas as pd
 
-from engine.indicators.base import Indicator, IndicatorParamSpec
+from engine.indicators.base import Indicator, IndicatorParamSpec, ThresholdSuggestion
 from engine.operators import apply_operator, crossed_above, crossed_below
 
 
@@ -13,6 +13,20 @@ class StochasticIndicator(Indicator):
         IndicatorParamSpec("kPeriod", "%K period", "INT", 14, min=2, max=200),
         IndicatorParamSpec("dPeriod", "%D period", "INT", 3, min=1, max=50),
         IndicatorParamSpec("smooth", "%K smoothing", "INT", 3, min=1, max=50),
+    ]
+
+    uses_threshold = True
+    threshold_label = "Stochastic level"
+    threshold_help = (
+        "Runs 0–100. 20 = oversold, 80 = overbought. Used with 'is above/below'. "
+        "(The 'crosses' operators compare %K against %D and ignore this level.)"
+    )
+    threshold_min = 0
+    threshold_max = 100
+    default_threshold = 20
+    threshold_suggestions = [
+        ThresholdSuggestion("Oversold", 20),
+        ThresholdSuggestion("Overbought", 80),
     ]
 
     def evaluate(self, i, df, params, operator, threshold):

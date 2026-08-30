@@ -21,7 +21,11 @@ class ExitConditionDTO(BaseModel):
 class StrategyDefinitionDTO(BaseModel):
     model_config = ConfigDict(extra="allow")
     name: str
-    ticker: str
+    # `tickers` is the source of truth (up to MAX_TICKERS symbols). `ticker` is
+    # kept for backward compatibility / display and mirrors tickers[0]; it is
+    # normalized in strategy_validator so both stay in sync.
+    ticker: str = ""
+    tickers: list[str] = []
     interval: str
     period: str
     rr: float
@@ -46,6 +50,7 @@ class StrategyResponseDTO(BaseModel):
     id: UUID
     name: str
     ticker: str
+    tickers: list[str] = []
     interval: str
     period: str
     rr: float

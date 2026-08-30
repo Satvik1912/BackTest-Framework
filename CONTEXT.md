@@ -2,92 +2,75 @@
 
 Profit Life is a full-stack platform for systematic traders. The first app is **BackTest** (research strategies on historical Indian-equity data); **AutoTrade** and **Live Signals** are on the roadmap. This file is the working snapshot of how everything fits together — read it first when picking up work.
 
+> **Architecture note (important):** The backtest engine now runs **in-process** inside the FastAPI backend via a bounded `ThreadPoolExecutor`. The old standalone **Redis-queued worker** service has been removed. If you see references to Redis, `BLPOP`, `backtest:queue`, a `worker/` service, or `X-Internal-Secret` in `README.md` or older docs, they are **stale** — the live design is described below.
+
 ## 1. Architecture (high level)
 
 ```
-┌──────────┐   HTTPS    ┌──────────┐   psycopg2  ┌──────────┐
-│ frontend │ ─────────▶ │   api    │ ──────────▶ │ postgres │
-│  (React) │            │ (FastAPI)│             └──────────┘
-└──────────┘            │          │   RPUSH     ┌──────────┐
-                        │          │ ──────────▶ │  redis   │
-                        └────┬─────┘             └────┬─────┘
-                             │ ▲                      │ BLPOP
-                             │ │ X-Internal-Secret    ▼
-                             │ │                ┌──────────┐
-                             └─┴────────────────│  worker  │
-                                                │ (Python) │
-                                                └──────────┘
+┌──────────┐   HTTPS    ┌───────────────────────────┐   psycopg2  ┌──────────┐
+│ frontend │ ─────────▶ │          backend          │ ──────────▶ │ postgres │
+│  (React) │            │         (FastAPI)         │             └──────────┘
+└──────────┘            │  ┌─────────────────────┐  │
+                        │  │ in-process runner   │  │   yfinance (Yahoo)
+                        │  │ ThreadPoolExecutor  │ ─┼──────────────▶ internet
+                        │  │  → JobExecutor      │  │
+                        │  └─────────────────────┘  │
+                        └───────────────────────────┘
 ```
 
-Six services, all run together via `docker compose up --build`:
+Services run together via `docker compose up --build`:
 
-| Service  | Tech                                  | Port  | Role |
-|----------|---------------------------------------|-------|------|
-| frontend | React 18 + TS + Tailwind + Recharts   | 3000  | UI: home, login, strategy builder, jobs, admin |
-| api      | Python 3.11 + FastAPI + SQLAlchemy 2  | 8080  | REST API, auth, strategy CRUD, job dispatch |
-| worker   | Python 3.11 + pandas + yfinance       | —     | Consumes jobs from Redis, runs backtest, posts results |
-| postgres | Postgres 16                           | 5432  | Users, strategies, jobs, results |
-| redis    | Redis 7                               | 6379  | Job queue (`backtest:queue` list) |
-| pgadmin  | dpage/pgadmin4:8                      | 5050  | Web UI for browsing the DB |
+| Service  | Tech                                     | Port | Role |
+|----------|------------------------------------------|------|------|
+| frontend | React 18 + TS + Tailwind + Recharts (Vite) | 3000 | UI: home, login, strategy builder, jobs, admin |
+| backend  | Python 3.11 + FastAPI + SQLAlchemy 2     | 8080 | REST API, auth, strategy CRUD, **and** in-process backtest execution |
+| postgres | Postgres 16                              | 5432 | Users, strategies, jobs, results |
+| pgadmin  | dpage/pgadmin4:8                         | 5050 | Web UI for browsing the DB |
 
-Worker is scaled with `replicas: 2` in `docker-compose.yml` — they share the queue via Redis `BLPOP`, so jobs are naturally load-balanced.
+There is **no separate worker and no Redis**. Backtests execute on a `ThreadPoolExecutor` (default 2 threads, `ENGINE_MAX_WORKERS`) living inside the backend process — see `backend/runner/job_runner.py`.
+
+**On-disk layout:** the API service directory is `backend/` (docs sometimes say `api/`). It is organized as a layered app: `controllers/` (HTTP) → `services/` (business logic) → `repositories/` (data access) → `models/` (SQLAlchemy) + `dtos/` (Pydantic) + `engine/` (backtest math) + `runner/` (thread pool) + `security/` + `config/` + `db/`.
 
 ## 2. Tech stack details
 
-**API** (`api/requirements.txt`):
-- FastAPI 0.115 + uvicorn[standard]
+**Backend** (`backend/requirements.txt`):
+- FastAPI 0.115 + uvicorn[standard] 0.32
 - SQLAlchemy 2.0 (sync) + psycopg2-binary
-- Alembic for migrations (`api/alembic/`)
+- Alembic 1.13 for migrations (`backend/alembic/`)
 - Pydantic v2 + pydantic-settings
-- PyJWT 2.9 (HS256), passlib[bcrypt] for password hashing
-- redis 5 (sync client)
+- PyJWT 2.9 (HS256), passlib[bcrypt] + bcrypt for password hashing
+- **yfinance + pandas 2.2 + numpy 1.26** — the backtest engine runs here now (no separate worker)
 
 **Frontend** (`frontend/package.json`):
-- React 18, react-router-dom 6, axios, recharts
-- Tailwind + Vite
+- React 18, react-router-dom 6, axios 1.7, recharts 2.13
+- Tailwind + Vite (`npm run dev` → :5173; `npm run build` → static served by nginx on :3000)
 
-**Worker** (`worker/requirements.txt`):
-- yfinance 1.3.0 (data source — Yahoo Finance, Indian tickers like `TATASTEEL.NS`)
-- pandas 2.2.0, numpy 1.26.4
-- redis 5.0.1 (for `BLPOP`)
-- requests 2.31.0 (to call api's `/api/internal/*`)
+## 3. Auth model — JWT + refresh token
 
-## 3. Auth model — TWO parallel schemes
+All auth is user-facing. There is **no** worker/internal-secret scheme anymore (the internal endpoints were removed with the worker). Auth is enforced by FastAPI dependencies in `backend/security/dependencies.py`.
 
-Both checks happen inside FastAPI dependencies (`api/security.py`). The `JwtAuthFilter` / `InternalSecretFilter` pattern from Spring is replaced by `get_current_user`, `require_admin`, and `require_internal` dependencies attached to routes.
+- **JWT** (`security.generate_token` / `jwt_util`): HS256, signed with `JWT_SECRET`, 24-hour expiry. Carries `sub = userId`, `email`, `role`.
+- **Refresh token** (`auth_service._issue_tokens`): random UUID, stored in `refresh_tokens` table, 30-day expiry (`refresh_token_days`). **Reused on refresh (not rotated).**
+- On every protected request, `get_current_user` reads `Authorization: Bearer <token>`, validates with PyJWT, and injects a `CurrentUser(user_id, email, role)`. Missing/invalid → 401.
+- `require_admin` wraps `get_current_user` and asserts `role == "ADMIN"` (403 otherwise).
 
-### 3a. User auth — JWT (stateless) + refresh token (stateful)
-
-- **JWT** (`security.generate_token`): HS256, signed with `JWT_SECRET`, 24-hour expiry. Carries `sub = userId`, `email`, `role`.
-- **Refresh token** (`routers/auth._issue_tokens`): random UUID, stored in `refresh_tokens` table, 30-day expiry. Reused on refresh (not rotated).
-- On every protected request, `get_current_user` reads `Authorization: Bearer <token>`, validates it with PyJWT, and returns a `CurrentUser(user_id, email, role)` object injected into the route.
-- If the header is missing or invalid → FastAPI returns 401 via the dependency.
-- `require_admin` is a small wrapper that also asserts `role == ADMIN` (403 otherwise).
-
-**Endpoints** (`api/routers/auth.py`):
-- `POST /api/auth/register` → bcrypt password, save user (role=USER, is_approved=false), return userId only **(no tokens — user must wait for admin approval)**
-- `POST /api/auth/login` → verify password, reject if not approved or role≠USER, **delete all old refresh tokens for that user**, mint new pair
-- `POST /api/auth/admin/register` → verify `admin.key` matches `ADMIN_KEY`, create user (role=ADMIN, is_approved=true), mint tokens
+**Endpoints** (`controllers/auth_controller.py` → `services/auth_service.py`):
+- `POST /api/auth/register` → bcrypt password, save user (role=USER, `is_approved=false`), return `{email, userId, role}` **(no tokens — user must wait for admin approval)**
+- `POST /api/auth/login` → verify password; reject if role≠USER or not approved; **delete all old refresh tokens for that user**; mint new pair
+- `POST /api/auth/admin/register` → verify `adminKey == ADMIN_KEY`, create user (role=ADMIN, approved+verified), mint tokens
 - `POST /api/auth/admin/login` → verify password, require role=ADMIN, wipe refresh tokens, mint new pair
 - `POST /api/auth/refresh` → look up refresh token, check expiry, mint new JWT (refresh value reused)
-- `POST /api/auth/logout` → delete the refresh token row
+- `POST /api/auth/logout` → delete the refresh token row (204)
 
-**Public routes**: register, login, refresh, admin register, admin login, GET `/api/indicators`, `/actuator/health`.
+**Public routes**: register, login, refresh, admin register, admin login, `GET /api/indicators`, `GET /actuator/health`.
 
-### 3b. Worker auth — shared secret
-
-The worker talks to `/api/internal/**` to update job status and post results. No user, so it sends header `X-Internal-Secret: $INTERNAL_SECRET`. The `require_internal` dependency on the internal router checks the header; mismatch → 403.
-
-Same `INTERNAL_SECRET` env var is passed to both api (`docker-compose.yml`) and worker (`docker-compose.yml`).
-
-### 3c. Frontend wiring
-
-- `frontend/src/api/client.ts` axios instance attaches `Authorization: Bearer <token>` from `localStorage` on every request. On 401 it clears storage and redirects to `/login` (or `/admin/login` if the user was an admin).
+### Frontend wiring
+- `frontend/src/api/client.ts` — axios instance; request interceptor attaches `Authorization: Bearer <token>` from `localStorage`. On a 401 it clears storage and redirects to `/login` (or `/admin/login` if the stored user was an admin). Base URL from `VITE_API_URL`, defaulting to `http://localhost:8080`.
 - `frontend/src/context/AuthContext.tsx` holds the in-memory `(user, token)` and persists to localStorage. `ProtectedRoute` gates routes on `isAuthenticated` and optional `requiredRole`.
 
 ## 4. Data model (Postgres)
 
-Five tables. Alembic baseline `0001_baseline.py` creates them all idempotently (matches the old Flyway V1–V5 SQL). New installs run `alembic upgrade head`; an existing DB uses `alembic stamp head` once to mark itself current.
+Five tables. Alembic baseline `0001_baseline.py` creates them all idempotently. New installs run `alembic upgrade head`; an existing DB uses `alembic stamp head` once to mark itself current.
 
 - `users(id UUID, email UNIQUE, password_hash, is_verified, role TEXT default 'USER', is_approved BOOLEAN, last_login, created_at)`
 - `refresh_tokens(id UUID, user_id FK ON DELETE CASCADE, token UNIQUE, expires_at, created_at)`
@@ -96,71 +79,72 @@ Five tables. Alembic baseline `0001_baseline.py` creates them all idempotently (
 - `backtest_jobs(id UUID, strategy_id FK, user_id FK, status, submitted_at, started_at, completed_at, error_message)`. Status flow: `PENDING → RUNNING → DONE | FAILED`.
 - `backtest_results(id UUID, job_id UNIQUE FK, total_trades, wins, losses, win_rate, profit_factor, max_drawdown_pct, sharpe_ratio, equity_curve JSONB, trades JSONB, created_at)`.
 
-`Strategy.definition` is the full `StrategyDefinitionDTO` serialized to JSONB. SQLAlchemy's `JSONB` column maps directly to a `dict`, so no manual serialization on read.
+`Strategy.definition` is the full `StrategyDefinitionDTO` (`dto.model_dump()`) serialized to JSONB — ticker, interval, period, rr, direction, SL/target config, and entry conditions all live inside it. SQLAlchemy's `JSONB` column maps directly to a `dict`.
 
-## 5. The strategy / job flow
+## 5. The strategy / job flow (all in-process)
 
 1. **User builds a strategy** in `StrategyBuilder.tsx` → `POST /api/strategies`.
-   `routers/strategies.create` validates indicator keys against `INDICATORS` and saves the row.
+   `strategy_service.create` runs `strategy_validator.validate` (every `entryConditions[].indicatorKey` must be a registered indicator), then saves the row with `definition = dto.model_dump()`.
 
 2. **User runs a backtest** → `POST /api/backtest/run` with `{ strategyId }`.
-   `routers/jobs.submit` (`api/routers/jobs.py`):
-   - Loads the user's active (non-deleted) strategy
-   - Calls `enqueue_for_strategy(db, strategy, user_id)`:
-     - Creates a `BacktestJob` row with status `PENDING`
-     - Builds payload `{jobId, userId, strategyId, strategyDefinition, ticker, interval, period, rr}`
-     - `job_queue.push_job(payload)` → JSON-encodes and `RPUSH`es to Redis `backtest:queue`
-   - Returns `JobStatusResponse` immediately
+   `job_controller.submit` → `job_service.submit_job`:
+   - Loads the user's active (non-deleted) strategy (`find_active_by_id_and_user`)
+   - `enqueue_for_strategy`: creates a `BacktestJob` row with status `PENDING`, then calls `get_runner().submit(job.id)` — hands the job id to the `ThreadPoolExecutor`
+   - Returns a `JobStatusResponse` immediately (status `PENDING`)
 
-3. **Worker picks it up** (`worker/worker_main.py`):
-   - `BLPOP backtest:queue` with 30s timeout
-   - `post_status(job_id, "RUNNING")` → `PATCH /api/internal/jobs/{id}/status`
-   - `fetch_stock_data(ticker, period, interval)` via yfinance → pandas DataFrame
-   - `build_signal_func(strategy_def)` → closure that, given an index `i` and the DataFrame, returns `{enter: bool, sl: float}`
-   - `BacktestEngine(data, rr, signal_func).run()` walks the DataFrame bar-by-bar, opens a long when signal fires, exits when `low <= sl` (STOPLOSS) or `high >= target` (TARGET). Long-only, single-position-at-a-time.
-   - `compute_stats(trades, rr)` → win rate, profit factor, max drawdown, Sharpe, equity curve
-   - `post_results(job_id, results)` → `POST /api/internal/jobs/{id}/results`
+3. **A pool thread runs the job** (`runner/job_runner.py` → `engine/job_executor.py::JobExecutor.execute`):
+   - Loads job + strategy in a short DB session, reads `ticker/interval/period/rr` from the definition
+   - Sets status `RUNNING` (isolated short-lived session — the connection is **not** held during the slow work)
+   - `YFinanceProvider.fetch(ticker, period, interval)` → normalized pandas DataFrame (`datetime, open, high, low, close, volume`, tz `Asia/Kolkata`)
+   - `signal_func.build(definition)` → per-bar entry closure; `signal_func.build_manage_func(definition)` → per-bar trade manager (trailing SL + time exit)
+   - `BacktestEngine(df, rr, signal_func, manage_func).run()` → list of trades
+   - `stats.compute(trades, rr)` → win rate, profit factor, max drawdown, Sharpe, equity curve
+   - `job_service.save_job_result` upserts a `BacktestResult` and sets job status `DONE`
+   - Any exception → `JobExecutor` marks the job `FAILED` with the error message (isolated session)
 
-4. **API stores the results** (`routers/internal.save_result`):
-   - Upserts a `BacktestResult` row
-   - Sets job status to `DONE`
+4. **Frontend polls** `GET /api/backtest/jobs/{jobId}` → when status is `DONE`, `JobStatusResponse.result` carries the stats/trades/equity curve, rendered in `JobDetailPage.tsx`.
 
-5. **Frontend polls** `/api/backtest/jobs/{id}` → when status is `DONE`, renders trades + equity curve in `JobDetailPage.tsx`.
+**Startup recovery** (`services/recovery_service.reconcile_in_flight_jobs`, run in `main.py` lifespan): any `RUNNING` job left over from a previous process is marked `FAILED` ("Interrupted by backend restart"); any `PENDING` job is re-submitted to the pool. This replaces the durability the external queue used to provide.
 
-**Admin variant**: `POST /api/admin/strategies/{strategyId}/run` calls `enqueue_for_strategy` with the strategy's actual `user_id` — admin can run any user's strategy, including soft-deleted ones. The result is fetched via `GET /api/admin/jobs/{jobId}` (no owner check) and rendered by `AdminJobDetailPage.tsx`.
+**Admin variant**: `POST /api/admin/strategies/{strategyId}/run` → `job_service.submit_job_as_admin` enqueues using the strategy's actual `user_id` (can run any user's strategy, including soft-deleted ones — it uses `find_by_id`, not the active-only lookup). Result fetched via `GET /api/admin/jobs/{jobId}` (no owner check), rendered by `AdminJobDetailPage.tsx`.
 
-## 6. Indicators — metadata + math (separate concerns)
+## 6. Indicators — auto-registered plugin classes
 
-Two halves that must be kept in sync (still in two files, now both Python):
+Indicators live under `backend/engine/indicators/`, one class per file. `engine/indicators/base.py::Indicator` is an ABC; every subclass auto-registers into `Indicator._registry` via `__init_subclass__` keyed by its `key`. **No if/elif chain and no manual registry list** — dropping a new module in the folder is enough.
 
-**API side** — metadata only (`api/indicator_registry.py`):
-- A static `INDICATORS: list[IndicatorMetadata]` declares each indicator's `key`, `displayName`, `description`, `category`, `executionSide`, `params`.
-- `GET /api/indicators` returns this list → the frontend StrategyBuilder uses it to render the form (param fields, dropdowns).
-- `routers/strategies._validate` checks every entry condition references a key that exists in `INDICATORS`.
+- **Metadata → frontend**: `engine/indicators/registry.metadata()` builds the `IndicatorMetadata` list from the registered classes (key, displayName, description, category, `executionSide="PYTHON"`, params). `engine/__init__.py` exposes it as `INDICATORS`; `GET /api/indicators` returns it, and `StrategyBuilder` renders the form from it.
+- **Evaluation**: `signal_func._evaluate` looks the indicator up via `registry.get(key)` and calls `indicator.evaluate(i, df, params, operator, threshold) -> bool`.
+- **Validation**: `strategy_validator.validate` checks each entry-condition key against `engine.valid_keys()` (alias for `all_keys()`).
 
-**Worker side** — actual evaluation (`worker/indicators.py` + `worker/strategy_runner.py`):
-- `indicators.py` has the math: `compute_rsi`, `compute_ema`, `compute_macd`, `compute_bollinger`, `compute_atr`, `compute_volume_ma`, `is_hammer`, `is_bullish_engulfing`.
-- `strategy_runner.evaluate_condition()` is a giant if/elif on the indicator key — this is where you hook a new indicator into the runtime.
+**20 indicators today**, across 5 categories:
+- **TREND** — EMA, SMA, ADX, PSAR, SUPERTREND
+- **MOMENTUM** — RSI, MACD, STOCHASTIC, CCI, ROC, WILLIAMS_R
+- **VOLATILITY** — BOLLINGER, KELTNER, DONCHIAN
+- **PATTERN** — HAMMER, ENGULFING (bullish)
+- **VOLUME** — VOLUME_MA, OBV, MFI, VWAP
 
-**To add a new indicator**:
-1. Add an entry to `api/indicator_registry.INDICATORS` (key + display + params).
-2. Add the math to `worker/indicators.py`.
-3. Handle the key in `worker/strategy_runner.evaluate_condition`.
+**To add a new indicator**: create `engine/indicators/<name>.py` with a class extending `Indicator` that sets `key`, `display_name`, `description`, `category`, `params`, and implements `evaluate(...)`. That's it — metadata, validation, and dispatch all pick it up automatically.
 
-That's it — no other registration needed.
+**Operators** (`engine/operators.py`): `OVER`, `UNDER`, `EQUALS`, `CROSSES_ABOVE`, `CROSSES_BELOW` (plus `crossed_above`/`crossed_below` helpers for indicators that track the previous bar).
 
-## 7. Stoploss types (`worker/strategy_runner.compute_sl`)
+## 7. Stoploss & target — also plugin registries
 
-- `SWING_LOW` — min low over the last N candles (`slLookback`, default 5)
-- `ATR_MULTIPLE` — `close - atrMultiple * ATR(14)`
-- `FIXED_PCT` — `close * (1 - slPct/100)`
+Both mirror the indicator pattern (ABC + `__init_subclass__`, resolved by key with a default fallback).
 
-Target is always `entry + rr * (entry - sl)` — risk-reward multiplier set per strategy.
+**Stoploss** (`engine/stoploss/`, default `SWING_LOW`): `SWING_LOW`, `ATR_MULTIPLE`, `FIXED_PCT`, `CHANDELIER_EXIT`.
+- Calculators expose `compute(i, df, strategy_def)` for the entry SL and `update(i, df, trade, strategy_def)` for trailing (used by the manage func).
+
+**Target** (`engine/targets/`, default `R_MULTIPLE`): `R_MULTIPLE`, `ATR_MULTIPLE`, `FIXED_PCT`, `PRIOR_SWING_HIGH`.
+- `compute(i, df, entry, sl, strategy_def)`. `R_MULTIPLE` = `entry + rr * (entry - sl)` (mirrored for SHORT).
+
+**Trade management** (`signal_func.build_manage_func` + `BacktestEngine`): per bar it can (a) trail the stop (only tightening, and only if it stays on the correct side of price), and (b) force a `TIME_EXIT` once `maxBarsInTrade` bars have elapsed. Exits are checked as STOPLOSS / TARGET / TIME_EXIT.
+
+**Direction**: the engine supports both **LONG and SHORT** (`direction` in the strategy definition). SHORT inverts the SL/target sides and the stop/target hit checks. One position at a time.
 
 ## 8. REST API surface
 
 ```
-Auth:
+Auth (public):
   POST   /api/auth/register
   POST   /api/auth/login
   POST   /api/auth/logout
@@ -191,77 +175,77 @@ Admin (auth required, role=ADMIN):
   POST   /api/admin/strategies/{id}/run
   GET    /api/admin/jobs/{id}
 
-Internal (worker only, X-Internal-Secret header):
-  PATCH  /api/internal/jobs/{jobId}/status
-  POST   /api/internal/jobs/{jobId}/results
-
 Health:
-  GET    /actuator/health
+  GET    /actuator/health                  ({"status":"UP"})
 
 OpenAPI docs:
-  GET    /docs                              (FastAPI Swagger UI)
+  GET    /docs                             (FastAPI Swagger UI; redoc disabled)
 ```
 
-## 9. Environment variables (`.env.example`)
+There are **no `/api/internal/*` endpoints** — those belonged to the removed worker.
+
+## 9. Configuration / environment variables
+
+Settings load in `backend/config/settings.py` (pydantic-settings, reads a `backend/.env` if present):
+
+| Var                 | Default (local)                                             | Purpose |
+|---------------------|------------------------------------------------------------|---------|
+| `DATABASE_URL`      | `postgresql+psycopg2://backtest:secret@postgres:5432/backtest` | SQLAlchemy DSN. Also derivable from `SPRING_DATASOURCE_URL/_USERNAME/_PASSWORD` (JDBC form) for compose. |
+| `JWT_SECRET`        | `default-secret-change-in-production`                      | JWT signing key |
+| `ADMIN_KEY`         | `392172`                                                   | Required to register an admin account |
+| `ENGINE_MAX_WORKERS`| `2`                                                        | ThreadPoolExecutor size for backtests |
+| `CORS_ORIGINS`      | `http://localhost:3000,:5173,:5174`                        | Comma-separated allowed origins (parsed to a list) |
+
+> Note: `render.yaml` still declares an `INTERNAL_SECRET` env var — it is **vestigial** (the app no longer reads it) and can be removed.
+
+**Local dev without Docker:** point `DATABASE_URL` at `localhost` and run against a dockerized Postgres, e.g. `postgresql+psycopg2://backtest:secret@localhost:5432/backtest`.
+
+## 10. Frontend routes (`frontend/src/App.tsx`)
 
 ```
-JWT_SECRET=...                # api only — JWT signing key
-INTERNAL_SECRET=...           # api + worker — shared secret for internal endpoints
-ADMIN_KEY=...                 # api only — required to register an admin account
-POSTGRES_DB=backtest
-POSTGRES_USER=backtest
-POSTGRES_PASSWORD=...
-PGADMIN_EMAIL=admin@profitlife.com   # optional, pgAdmin login
-PGADMIN_PASSWORD=admin               # optional, pgAdmin login
-```
-
-CORS in `api/config.py` allows `http://localhost:3000`, `:5173`, `:5174` by default.
-
-## 10. Frontend routes (`App.tsx`)
-
-```
-/                               public landing (RootGate redirects authed users)
-/products/backtest              public BackTest product page (how-it-works + indicators)
+/                               RootGate — public HomePage, or redirect authed users to /dashboard | /admin
+/products/backtest              public BackTestInfoPage (how-it-works + indicators)
 /login                          public
 /register                       public
 /admin/login                    public
 /admin/register                 public (requires admin key on submit)
 
-/dashboard                      protected (USER)
-  ├─ /                          DashboardHome
+/dashboard                      protected (USER) — DashboardLayout
+  ├─ index                      DashboardHome
   ├─ /strategies                StrategiesListPage
   ├─ /strategies/new            StrategyBuilder
   ├─ /jobs                      JobsPage
   └─ /jobs/:jobId               JobDetailPage
 
-/admin                          protected (ADMIN)
-  ├─ /                          AdminHome
+/admin                          protected (ADMIN) — AdminLayout
+  ├─ index                      AdminHome
   ├─ /users                     AdminUsersPage (approve, delete, view strategies)
   ├─ /users/:userId/strategies  AdminUserStrategiesPage (per-card Run)
   └─ /jobs/:jobId               AdminJobDetailPage
+
+*                               redirect to /
 ```
 
-Brand assets:
-- Logo at `frontend/public/profit-life.png` (favicon + hero + nav)
-- `CandlestickBackdrop` + `QuotesMarquee` reusable decorative components
-- `AuthLayout` wraps all auth pages with a dark-hero / light-form split
+API modules: `src/api/{auth,strategies,jobs,admin}.ts` all use the shared `client.ts` axios instance. Reusable UI: `Navbar`, `Logo`, `AuthLayout` (dark-hero / light-form split), `CandlestickBackdrop`, `QuotesMarquee`, `ProtectedRoute`.
 
-## 11. Dev vs prod
+## 11. Dev vs prod / deployment
 
-**Dev** (running each service separately):
-- `docker compose up postgres redis pgadmin`
-- api: `cd api && uvicorn main:app --reload --port 8080` (with a local `.env`)
-- frontend: `cd frontend && npm run dev` → http://localhost:5173, Vite proxies `/api/*` to `:8080`
-- worker: `cd worker && python worker_main.py`
+**Local dev (each service separately):**
+- `docker compose up -d postgres` (and `pgadmin` if you want the DB UI)
+- backend: `cd backend && python -m uvicorn main:app --reload --port 8080` (with a local `.env` pointing `DATABASE_URL` at `localhost`)
+- frontend: `cd frontend && npm run dev` → http://localhost:5173 (Vite)
 
-**Prod / full docker**:
-- `docker compose up --build` → frontend on http://localhost:3000 (nginx serves built static + proxies `/api/*` to api service)
-- `frontend/.env.production` leaves `VITE_API_URL` empty; for a real deploy set it to your API hostname.
+**Full docker:** `docker compose up --build` → frontend on http://localhost:3000 (nginx serves the built static bundle).
+
+**Deployed:**
+- **Backend → Render** (`render.yaml`): Docker web service `profitlife-api`, Singapore region, free plan, `healthCheckPath: /actuator/health`, auto-deploy from `main`. `DATABASE_URL`/`ADMIN_KEY` set manually; `JWT_SECRET` generated; `CORS_ORIGINS = https://profitlife.in,https://www.profitlife.in`.
+- **Frontend → Cloudflare** (`wrangler.jsonc`, project `profitlife`): static assets served from `frontend/`. Set `VITE_API_URL` to the Render API hostname at build time.
 
 ## 12. Known things worth fixing later
 
-- **Login kills all other sessions** — `routers/auth.login` deletes all refresh tokens on every login. Multi-device support is a one-line change.
-- **Refresh tokens don't rotate** — same token value is reused after refresh.
-- **No tests yet** — neither `api/` nor `worker/` has a test suite. Pin indicator behavior at minimum.
-- **yfinance is a third-party scraper** — gets rate-limited and breaks on Yahoo's whims. For production move to a paid data provider (Polygon, Alpha Vantage, Kite Connect).
-- **Indicator math is in `worker/indicators.py` only** — fine today since the api doesn't need to compute, but if any future feature does (e.g. live signals), extract `indicators.py` into a shared package.
+- **Login kills all other sessions** — `auth_service.login`/`login_admin` delete *all* refresh tokens on every login. Multi-device support is a small change.
+- **Refresh tokens don't rotate** — the same token value is reused after `/refresh`.
+- **No tests yet** — neither backend logic nor the engine has a test suite. The indicator/stoploss/target classes are pure and easy to pin — start there.
+- **In-process execution is not durable across crashes mid-run** — startup recovery re-runs PENDING jobs and fails orphaned RUNNING ones, but a job in flight when the process dies is lost (marked FAILED on restart). Fine for the current scale; revisit if backtests get long or volume grows.
+- **yfinance is a third-party scraper** — rate-limited and breaks on Yahoo's whims. `MarketDataProvider` is the seam to swap in a paid source (Polygon, Alpha Vantage, Kite Connect) without touching the engine.
+- **`README.md` is stale** — it still documents the Redis + worker architecture and an `api/` layout. Update it to match this file.

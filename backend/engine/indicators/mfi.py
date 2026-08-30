@@ -1,6 +1,6 @@
 import pandas as pd
 
-from engine.indicators.base import Indicator, IndicatorParamSpec
+from engine.indicators.base import Indicator, IndicatorParamSpec, ThresholdSuggestion
 from engine.operators import apply_operator
 
 
@@ -10,6 +10,20 @@ class MfiIndicator(Indicator):
     description = "Volume-weighted RSI (0-100); >80 overbought, <20 oversold."
     category = "VOLUME"
     params = [IndicatorParamSpec("period", "Period", "INT", 14, min=2, max=200)]
+
+    uses_threshold = True
+    threshold_label = "MFI level"
+    threshold_help = (
+        "Like RSI but volume-weighted, 0–100. 20 = oversold (selling may be "
+        "exhausted), 80 = overbought (buying may be exhausted)."
+    )
+    threshold_min = 0
+    threshold_max = 100
+    default_threshold = 20
+    threshold_suggestions = [
+        ThresholdSuggestion("Oversold", 20),
+        ThresholdSuggestion("Overbought", 80),
+    ]
 
     def evaluate(self, i, df, params, operator, threshold):
         period = int(params.get("period", 14))

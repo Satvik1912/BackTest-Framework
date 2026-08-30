@@ -9,6 +9,7 @@ class RunBacktestRequest(BaseModel):
 
 
 class JobResultDTO(BaseModel):
+    symbol: Optional[str] = None
     totalTrades: Optional[int] = None
     wins: Optional[int] = None
     losses: Optional[int] = None
@@ -30,13 +31,21 @@ class JobStatusResponse(BaseModel):
     strategyId: Optional[UUID] = None
     strategyName: Optional[str] = None
     ticker: Optional[str] = None
+    tickers: list[str] = []
     interval: Optional[str] = None
     period: Optional[str] = None
     rr: Optional[float] = None
+    # First symbol's result — kept for backward compatibility. `results` is the
+    # full per-symbol list a multi-stock job produces.
     result: Optional[JobResultDTO] = None
+    results: list[JobResultDTO] = []
+    # Full strategy definition (entry conditions, SL/target, direction …) so the
+    # results page — and admins — can see exactly what strategy was applied.
+    definition: Optional[dict[str, Any]] = None
 
 
 class SaveJobResultRequest(BaseModel):
+    symbol: Optional[str] = None
     totalTrades: int = 0
     wins: int = 0
     losses: int = 0
